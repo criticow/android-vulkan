@@ -1,0 +1,14 @@
+{
+  "configurations": [
+    {
+      "name": "Android",
+      "includePath": [
+        "${env:NDK_HOME}/sources/android",
+        "${env:NDK_HOME}/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include"
+      ],
+      "compilerPath": "${env:NDK_HOME}/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe",
+      "cStandard": "c17"
+    }
+  ],
+  "version": 4
+}
