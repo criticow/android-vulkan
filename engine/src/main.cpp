@@ -15,6 +15,8 @@ struct android_app;
 #include <vulkan/vulkan.h>
 #include <optional>
 #include <set>
+#include <limits>
+#include <algorithm>
 
 #include "logger.hpp"
 
@@ -38,6 +40,12 @@ struct QueueFamilyIndices
   std::optional<uint32_t> presentFamily;
 };
 
+struct SwapChainSupportDetails {
+  VkSurfaceCapabilitiesKHR capabilities;
+  std::vector<VkSurfaceFormatKHR> formats;
+  std::vector<VkPresentModeKHR> presentModes;
+};
+
 struct VulkanConfig
 {
   VkInstance instance;
@@ -47,6 +55,11 @@ struct VulkanConfig
   VkQueue graphicsQueue;
   VkQueue presentQueue;
   VkSurfaceKHR surface;
+  VkSwapchainKHR swapChain;
+  std::vector<VkImage> swapChainImages;
+  VkFormat swapChainImageFormat;
+  VkExtent2D swapChainExtent;
+  std::vector<VkImageView> swapChainImageViews;
 };
 
 VulkanConfig vulkanConfig = {};
@@ -174,6 +187,7 @@ void createInstance(VkInstance *instance)
     instanceCreateInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
     instanceCreateInfo.ppEnabledLayerNames = validationLayers.data();
     populateDebugMessengerCreateInfo(debugCreateInfo);
+    // TODO: Check if VK_EXT_debug_utils is available before setting the pNext
     instanceCreateInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
   }
 
@@ -246,13 +260,13 @@ QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
   return indices;
 }
 
-bool checkDeviceExtensionsSupporte(VkPhysicalDevice device)
+bool checkDeviceExtensionsSupport(VkPhysicalDevice device)
 {
   uint32_t extensionsCount;
-  vkEnumerateDeviceExtensionProperties(vulkanConfig.physicalDevice, nullptr, &extensionsCount, nullptr);
+  vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionsCount, nullptr);
 
   std::vector<VkExtensionProperties> extensionProperties(extensionsCount);
-  vkEnumerateDeviceExtensionProperties(vulkanConfig.physicalDevice, nullptr, &extensionsCount, extensionProperties.data());
+  vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionsCount, extensionProperties.data());
 
   std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
 
@@ -264,11 +278,45 @@ bool checkDeviceExtensionsSupporte(VkPhysicalDevice device)
   return requiredExtensions.empty();
 }
 
+SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device) {
+  SwapChainSupportDetails details;
+
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, vulkanConfig.surface, &details.capabilities);
+
+  uint32_t formatCount = 0;
+  vkGetPhysicalDeviceSurfaceFormatsKHR(device, vulkanConfig.surface, &formatCount, nullptr);
+
+  if(formatCount != 0)
+  {
+    details.formats.resize(formatCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(device, vulkanConfig.surface, &formatCount, details.formats.data());
+  }
+
+  uint32_t presentCount = 0;
+  vkGetPhysicalDeviceSurfacePresentModesKHR(device, vulkanConfig.surface, &presentCount, nullptr);
+
+  if(presentCount != 0)
+  {
+    details.presentModes.resize(presentCount);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(device, vulkanConfig.surface, &presentCount, details.presentModes.data());
+  }
+
+  return details;
+}
+
 bool isDeviceSuitable(VkPhysicalDevice device)
 {
   QueueFamilyIndices indices = findQueueFamilies(device);
-  bool extensionsSupported = checkDeviceExtensionsSupporte(device);
-  return indices.graphicsFamily.has_value() && indices.presentFamily.has_value();
+  bool extensionsSupported = checkDeviceExtensionsSupport(device);
+
+  bool swapChainAdequate = false;
+  if(extensionsSupported)
+  {
+    SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
+    swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
+  }
+
+  return indices.graphicsFamily.has_value() && indices.presentFamily.has_value() && swapChainAdequate;
 }
 
 void pickPhysicalDevice()
@@ -295,6 +343,7 @@ void pickPhysicalDevice()
   }
 }
 
+
 void createLogicalDevice()
 {
   QueueFamilyIndices indices = findQueueFamilies(vulkanConfig.physicalDevice);
@@ -314,7 +363,6 @@ void createLogicalDevice()
     queueCreateInfo.pQueuePriorities = &queuePriority;
     queueCreateInfos.push_back(queueCreateInfo);
   }
-
 
   VkDeviceCreateInfo deviceCreateInfo = {};
   deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -339,12 +387,172 @@ void createLogicalDevice()
   vkGetDeviceQueue(vulkanConfig.device, indices.presentFamily.value(), 0, &vulkanConfig.presentQueue);
 }
 
+VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
+{
+  for (const auto& availableFormat : availableFormats)
+  {
+    if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+    {
+      return availableFormat;
+    }
+  }
+
+  return availableFormats[0];
+}
+
+VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes)
+{
+  for (const auto& availablePresentMode : availablePresentModes)
+  {
+    if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
+    {
+      return availablePresentMode;
+    }
+  }
+
+  return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
+{
+  if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+  {
+    return capabilities.currentExtent;
+  }
+  else
+  {
+    int width, height;
+    #ifdef __ANDROID__
+    width = static_cast<int>(ANativeWindow_getWidth(androidApp->window));
+    height = static_cast<int>(ANativeWindow_getHeight(androidApp->window));
+    #else
+    glfwGetFramebufferSize(glfwWindow, &width, &height);
+    #endif
+
+    VkExtent2D actualExtent = {
+      static_cast<uint32_t>(width),
+      static_cast<uint32_t>(height)
+    };
+
+    actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+    actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+
+    return actualExtent;
+  }
+}
+
+void createSwapChain()
+{
+  SwapChainSupportDetails swapChainSupport = querySwapChainSupport(vulkanConfig.physicalDevice);
+
+  VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
+  VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
+  VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
+
+  uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
+
+  // Make sure not to exceed number of images while adding +1 to minImageCount
+  if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount)
+  {
+    imageCount = swapChainSupport.capabilities.maxImageCount;
+  }
+
+  VkSwapchainCreateInfoKHR swapchainCreateInfo = {};
+  swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  swapchainCreateInfo.pNext = nullptr;
+  // swapchainCreateInfo.flags;
+  swapchainCreateInfo.surface = vulkanConfig.surface;
+  swapchainCreateInfo.minImageCount = imageCount; // The implementation will either create the swapchain with at least that many images, or it will fail to create the swapchain.
+  swapchainCreateInfo.imageFormat = surfaceFormat.format;
+  swapchainCreateInfo.imageColorSpace = surfaceFormat.colorSpace;
+  swapchainCreateInfo.imageExtent = extent;
+  swapchainCreateInfo.imageArrayLayers = 1; // For non-stereoscopic-3D applications, this value is 1.
+  swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; // specifies that the image can be used to create a VkImageView suitable for use as a color or resolve attachment in a VkFramebuffer.
+
+  QueueFamilyIndices indices = findQueueFamilies(vulkanConfig.physicalDevice);
+  uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
+
+  // If the families are different
+  if (indices.graphicsFamily != indices.presentFamily)
+  {
+    swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+    swapchainCreateInfo.queueFamilyIndexCount = 2; // Number of queue families accessing the the images of the swapchain
+    swapchainCreateInfo.pQueueFamilyIndices = queueFamilyIndices; // pointer to the array of families
+  }
+  else
+  {
+    swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapchainCreateInfo.queueFamilyIndexCount = 0; // Optional
+    swapchainCreateInfo.pQueueFamilyIndices = nullptr; // Optional
+  }
+
+  swapchainCreateInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+  auto compositeAlpha = static_cast<VkCompositeAlphaFlagBitsKHR>(swapChainSupport.capabilities.supportedCompositeAlpha);
+
+  swapchainCreateInfo.compositeAlpha = compositeAlpha;
+  swapchainCreateInfo.presentMode = presentMode;
+  swapchainCreateInfo.clipped = VK_TRUE;
+  swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
+
+  if(vkCreateSwapchainKHR(vulkanConfig.device, &swapchainCreateInfo, nullptr, &vulkanConfig.swapChain) != VK_SUCCESS)
+  {
+    LOG_DEBUG("Failed to create swapchain");
+  }
+
+  vkGetSwapchainImagesKHR(vulkanConfig.device, vulkanConfig.swapChain, &imageCount, nullptr);
+  vulkanConfig.swapChainImages.resize(imageCount);
+  vkGetSwapchainImagesKHR(vulkanConfig.device, vulkanConfig.swapChain, &imageCount, vulkanConfig.swapChainImages.data());
+
+  vulkanConfig.swapChainImageFormat = surfaceFormat.format;
+  vulkanConfig.swapChainExtent = extent;
+}
+
+void createImageViews()
+{
+  vulkanConfig.swapChainImageViews.resize(vulkanConfig.swapChainImages.size());
+  for(size_t i = 0; i < vulkanConfig.swapChainImages.size(); i++)
+  {
+    VkImageViewCreateInfo imageViewCreateInfo = {};
+    imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    imageViewCreateInfo.pNext = nullptr;
+    // imageViewCreateInfo.flags;
+    imageViewCreateInfo.image = vulkanConfig.swapChainImages[i];
+    imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    imageViewCreateInfo.format = vulkanConfig.swapChainImageFormat;
+
+    VkComponentMapping components = {};
+    components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    imageViewCreateInfo.components = components;
+
+    VkImageSubresourceRange subresourceRange = {};
+    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; // i think this is somehow like GL_COLOR_BUFFER_BIT
+    subresourceRange.baseMipLevel = 0;
+    subresourceRange.levelCount = 1;
+    subresourceRange.baseArrayLayer = 0;
+    subresourceRange.layerCount = 1;
+    imageViewCreateInfo.subresourceRange = subresourceRange;
+
+    if(vkCreateImageView(vulkanConfig.device, &imageViewCreateInfo, nullptr, &vulkanConfig.swapChainImageViews[i]))
+    {
+      LOG_DEBUG("Failed to create image view");
+    }
+  }
+}
+
 void cleanUp()
 {
   if (enableValidationLayers) {
     DestroyDebugUtilsMessengerEXT(vulkanConfig.instance, vulkanConfig.debugMessenger, nullptr);
   }
 
+  for (auto imageView : vulkanConfig.swapChainImageViews) {
+    vkDestroyImageView(vulkanConfig.device, imageView, nullptr);
+  }
+
+  vkDestroySwapchainKHR(vulkanConfig.device, vulkanConfig.swapChain, nullptr);
   vkDestroyDevice(vulkanConfig.device, nullptr);
   vkDestroySurfaceKHR(vulkanConfig.instance, vulkanConfig.surface, nullptr);
   vkDestroyInstance(vulkanConfig.instance, nullptr);
@@ -363,6 +571,8 @@ void initVulkan()
   createSurface();
   pickPhysicalDevice();
   createLogicalDevice();
+  createSwapChain();
+  createImageViews();
 }
 
 void pollEvents()
