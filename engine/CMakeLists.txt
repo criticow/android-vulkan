@@ -31,3 +31,21 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE ${LINK_LIBS})
 target_include_directories(${PROJECT_NAME} PRIVATE ${INCLUDE_DIRS})
+
+if(ANDROID)
+  add_custom_target(copy_data
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different 
+    "${CMAKE_CURRENT_SOURCE_DIR}/data/"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../android_vulkan/app/src/main/assets"
+    COMMENT "Copying data"
+  )
+else()
+  add_custom_target(copy_data
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different 
+    "${CMAKE_CURRENT_SOURCE_DIR}/data/"
+    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    COMMENT "Copying data"
+  )
+endif()
+
+add_dependencies(${PROJECT_NAME} copy_data)
