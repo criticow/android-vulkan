@@ -12,12 +12,12 @@ set(GLFW_INSTALL OFF CACHE BOOL "Don't install GLFW")
 
 set(SOURCES src/main.cpp)
 set(LINK_LIBS Vulkan::Vulkan)
-set(INCLUDE_DIRS deps/glm)
+set(INCLUDE_DIRS deps/glm deps/stb)
 
 find_package(Vulkan REQUIRED)
 
 if(ANDROID)
-  list(APPEND LINK_LIBS android log)
+  list(APPEND LINK_LIBS android log jnigraphics)
   list(APPEND SOURCES $ENV{NDK_HOME}/sources/android/native_app_glue/android_native_app_glue.c)
   list(APPEND INCLUDE_DIRS $ENV{NDK_HOME}/sources/android)
 
